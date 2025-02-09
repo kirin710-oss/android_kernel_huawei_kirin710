@@ -376,12 +376,12 @@ static void __init setup_command_line(char *command_line)
 	if (enter_recovery != NULL) {
 		enter_recovery += strlen("enter_recovery=");
 		if (*enter_recovery == '1') { 
-		    strcat(boot_command_line, "selinux=1 security=selinux"); 
+		    strcat(boot_command_line, "selinux=1 apparmor=0 security=selinux"); 
 		} else {
 		remove_substring(boot_command_line, "skip_initramfs");
 		remove_substring(boot_command_line, "hw_bfr_enable=1");
 		remove_substring(boot_command_line, "androidboot.verifiedbootstate=orange");
-		strcat(boot_command_line, "androidboot.verifiedbootstate=GREEN hw_bfr_enable=0");
+		strcat(boot_command_line, "androidboot.verifiedbootstate=GREEN hw_bfr_enable=0 selinux=1 apparmor=0 security=selinux");
 		}
 	}
 	
@@ -502,35 +502,6 @@ static void __init mm_init(void)
 	kaiser_init();
 }
 
-#ifdef CMDLINE_INFO_FILTER
-static void __init filter_args(char *cmdline) {
-	static char tmp_cmdline[COMMAND_LINE_SIZE] __initdata;
-	char *cmd_prefix = NULL;
-	char *cmd_suffix = NULL;
-	int len = 0;
-	strlcpy(tmp_cmdline, cmdline, COMMAND_LINE_SIZE);
-	cmd_prefix = strstr(tmp_cmdline, "androidboot.serialno");
-	if (cmd_prefix == NULL) {
-		pr_notice("Kernel command line: %s\n", tmp_cmdline);
-		return;
-	}
-	cmd_suffix = strstr(cmd_prefix, " ");
-	len = (cmd_suffix != NULL) ? (cmd_suffix - cmd_prefix)
-                             : (cmdline + strlen(cmdline) - cmd_prefix);
-	memset(cmd_prefix, '*', len);
-	pr_notice("Kernel command line: %s\n", tmp_cmdline);
-	return;
-}
-#endif
-
-#ifdef CONFIG_DEBUG_RODATA
-void mark_constdata_ro(void);
-#else
-static void mark_constdata_ro(void)
-{
-}
-#endif
-
 asmlinkage __visible void __init start_kernel(void)
 {
 	char *command_line;
@@ -539,11 +510,6 @@ asmlinkage __visible void __init start_kernel(void)
 	set_task_stack_end_magic(&init_task);
 	smp_setup_processor_id();
 	debug_objects_early_init();
-
-	/*
-	 * Set up the the initial canary ASAP:
-	 */
-	boot_init_stack_canary();
 
 	cgroup_init_early();
 
@@ -558,12 +524,13 @@ asmlinkage __visible void __init start_kernel(void)
 	page_address_init();
 	pr_notice("%s", linux_banner);
 	setup_arch(&command_line);
-#ifdef CONFIG_HISI_EARLY_RODATA_PROTECTION
-/* setup_arch is the last function to alter the constdata content */
-	mark_constdata_ro();
-#endif
+	/*
+	 * Set up the the initial canary ASAP:
+	 */
+	boot_init_stack_canary();
 	mm_init_cpumask(&init_mm);
 	setup_command_line(command_line);
+	//remove_substring(saved_command_line, "root=PARTUUID=b5abc42c-d422-4290-a4c3-29e4424da312");
 	setup_nr_cpu_ids();
 	setup_per_cpu_areas();
 	smp_prepare_boot_cpu();	/* arch-specific boot-cpu hooks */
@@ -572,11 +539,7 @@ asmlinkage __visible void __init start_kernel(void)
 	build_all_zonelists(NULL, NULL);
 	page_alloc_init();
 
-#ifdef CMDLINE_INFO_FILTER
-	filter_args(boot_command_line);
-#endif
-	/* parameters may set static keys */
-	jump_label_init();
+	pr_notice("Kernel command line: %s\n", boot_command_line);
 	parse_early_param();
 	after_dashes = parse_args("Booting kernel",
 				  static_command_line, __start___param,
@@ -585,6 +548,8 @@ asmlinkage __visible void __init start_kernel(void)
 	if (!IS_ERR_OR_NULL(after_dashes))
 		parse_args("Setting init args", after_dashes, NULL, 0, -1, -1,
 			   NULL, set_init_arg);
+
+	jump_label_init();
 
 	/*
 	 * These use large bootmem allocations and must precede
@@ -612,14 +577,6 @@ asmlinkage __visible void __init start_kernel(void)
 		 "Interrupts were enabled *very* early, fixing it\n"))
 		local_irq_disable();
 	idr_init_cache();
-
-	/*
-	 * Allow workqueue creation and work item queueing/cancelling
-	 * early.  Work item execution depends on kthreads and starts after
-	 * workqueue_init().
-	 */
-	workqueue_init_early();
-
 	rcu_init();
 
 	/* trace_printk() and trace points may be used after this */
@@ -705,8 +662,9 @@ asmlinkage __visible void __init start_kernel(void)
 	security_init();
 	dbg_late_init();
 	vfs_caches_init();
-	pagecache_init();
 	signals_init();
+	/* rootfs populating might need page-writeback */
+	page_writeback_init();
 	proc_root_init();
 	nsfs_init();
 	cpuset_init();
@@ -916,8 +874,11 @@ static void __init do_initcalls(void)
 {
 	int level;
 
-	for (level = 0; level < ARRAY_SIZE(initcall_levels) - 1; level++)
+	for (level = 0; level < ARRAY_SIZE(initcall_levels) - 1; level++) {
 		do_initcall_level(level);
+		/* need to finish all async calls before going into next level */
+		async_synchronize_full();
+	}
 }
 
 /*
@@ -993,14 +954,10 @@ __setup("rodata=", set_debug_rodata);
 #ifdef CONFIG_DEBUG_RODATA
 static void mark_readonly(void)
 {
-	if (rodata_enabled) {
-#ifndef CONFIG_HISI_EARLY_RODATA_PROTECTION
-		mark_constdata_ro();
-#endif
+	if (rodata_enabled)
 		mark_rodata_ro();
-	} else {
+	else
 		pr_info("Kernel memory protection disabled.\n");
-	}
 }
 #else
 static inline void mark_readonly(void)
@@ -1023,7 +980,6 @@ static int __ref kernel_init(void *unused)
 
 	rcu_end_inkernel_boot();
 
-	pr_err("Kernel init end, jump to execute /init\n");
 	if (ramdisk_execute_command) {
 		ret = run_init_process(ramdisk_execute_command);
 		if (!ret)
@@ -1077,8 +1033,6 @@ static noinline void __init kernel_init_freeable(void)
 	cad_pid = task_pid(current);
 
 	smp_prepare_cpus(setup_max_cpus);
-
-	workqueue_init();
 
 	do_pre_smp_initcalls();
 	lockup_detector_init();

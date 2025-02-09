@@ -44,13 +44,6 @@ static int root_wait;
 
 dev_t ROOT_DEV;
 
-#ifdef CONFIG_OAE_DM_ROOT
-extern dev_t begin_oae_dm(dev_t orginal_dev,
-			  char *saved_root_name,
-			  char *root_device_name);
-extern void end_oae_dm(void);
-#endif
-
 #ifdef CONFIG_ANDROID_SAR_RAMDISK
 static int __initdata android_bootmode;
 
@@ -457,7 +450,7 @@ retry:
 out:
 	put_page(page);
 }
- 
+
 #ifdef CONFIG_ROOT_NFS
 
 #define NFSROOT_TIMEOUT_MIN	5
@@ -579,23 +572,11 @@ void __init mount_root(void)
 #endif
 #ifdef CONFIG_BLOCK
 	{
-#ifndef CONFIG_OAE_DM_ROOT
 		int err = create_dev("/dev/root", ROOT_DEV);
-#else
-		int err;
-		
-		ROOT_DEV = begin_oae_dm(ROOT_DEV, saved_root_name,
-					root_device_name);
-
-		err = create_dev("/dev/root", ROOT_DEV);
 
 		if (err < 0)
 			pr_emerg("Failed to create /dev/root: %d\n", err);
 		mount_block_root("/dev/root", root_mountflags);
-#endif
-#ifdef CONFIG_OAE_DM_ROOT
-		end_oae_dm();
-#endif
 	}
 #endif
 }
