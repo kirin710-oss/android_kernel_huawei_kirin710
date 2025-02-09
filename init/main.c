@@ -353,17 +353,14 @@ static inline void setup_nr_cpu_ids(void) { }
 static inline void smp_prepare_cpus(unsigned int maxcpus) { }
 #endif
 
-static void remove_flag(char *cmd, const char *flag)
+void remove_substring(char *str, const char *sub)
 {
-	char *start_addr, *end_addr;
-	/* Ensure all instances of a flag are removed */
-	while ((start_addr = strstr(cmd, flag))) {
-		end_addr = strchr(start_addr, ' ');
-		if (end_addr)
-			memmove(start_addr, end_addr + 1, strlen(end_addr));
-		else
-			*(start_addr - 1) = '\0';
-	}
+  char *start, *end; 
+  while ((start = strstr(str, sub))) 
+  {
+    end = start + strlen(sub); 
+    memmove(start, end, strlen(end) + 1); 
+  }
 }
 
 /*
@@ -374,16 +371,20 @@ static void remove_flag(char *cmd, const char *flag)
  */
 static void __init setup_command_line(char *command_line)
 {
-	// magisk removes skip_initramfs from kernel
-	// so skip_initramfs won't be removed from cmdline
-	// and magisk will use SARInit which renders
-	// the device unbootable so we have to 'hide'
-	// skip_initramfs string
-	char skip_initramfs[] = "skip!initramfs";
-	skip_initramfs[4] = '_';
-	remove_flag(command_line, skip_initramfs);
-	remove_flag(boot_command_line, skip_initramfs);
-
+	char *enter_recovery;
+	enter_recovery = strstr(boot_command_line, "enter_recovery=");
+	if (enter_recovery != NULL) {
+		enter_recovery += strlen("enter_recovery=");
+		if (*enter_recovery == '1') { 
+		    strcat(boot_command_line, "selinux=1 security=selinux"); 
+		} else {
+		remove_substring(boot_command_line, "skip_initramfs");
+		remove_substring(boot_command_line, "hw_bfr_enable=1");
+		remove_substring(boot_command_line, "androidboot.verifiedbootstate=orange");
+		strcat(boot_command_line, "androidboot.verifiedbootstate=GREEN hw_bfr_enable=0");
+		}
+	}
+	
 	saved_command_line =
 		memblock_virt_alloc(strlen(boot_command_line) + 1, 0);
 	initcall_command_line =

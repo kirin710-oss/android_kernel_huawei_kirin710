@@ -60,7 +60,7 @@ static int __init android_bootmode_setup(char *str) {
 	android_bootmode = simple_strtol(str,NULL,0);
 	return 1;
 }
-__setup("bootmode=", android_bootmode_setup);
+__setup("enter_recovery=", android_bootmode_setup);
 #endif
 
 static int __init load_ramdisk(char *str)
@@ -553,21 +553,25 @@ void __init mount_root(void)
 #endif
 #ifdef CONFIG_ANDROID_SAR_RAMDISK
 	// don't load ramdisk for recovery
-	if (android_bootmode != 2) {
+	if (android_bootmode != 1) {
 		dev_t android_bootpart;
-
+		pr_err("Starting SAR ramdisk mounting process...\n");
+                pr_err("Current boot mode: android_bootmode = %d\n", android_bootmode);
 		/* wait for any asynchronous scanning to complete */
 		printk(KERN_INFO "Waiting for root device %s...\n",
 			CONFIG_ANDROID_BOOT_PARTITION);
 		while (driver_probe_done() != 0 ||
 			(android_bootpart = name_to_dev_t(CONFIG_ANDROID_BOOT_PARTITION)) == 0)
+		        pr_err("Waiting for driver probe completion and root device availability...\n");
 			msleep(5);
 		async_synchronize_full();
-
+		pr_err("Driver probe completed and root device available: %d\n" , android_bootpart);
+		pr_err("Creating device node /dev/android_boot...\n");
 		create_dev("/dev/android_boot", android_bootpart);
 
 		if (mount_sar_ramdisk("/dev/android_boot")) {
 			ROOT_DEV = Root_RAM0;
+			pr_err("Updated ROOT_DEV value: %d\n", ROOT_DEV);
 
 			return;
 		}
